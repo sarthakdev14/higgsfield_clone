@@ -7,6 +7,7 @@ A generative-media SaaS. Users sign in and can:
 - **Generate images** from a prompt with a choice of model, resolution, aspect
   ratio and optional reference images.
 - **Face swap** — upload a base image and a face, and get the face swapped in.
+<img width="1002" height="702" alt="image" src="https://github.com/user-attachments/assets/45c9a136-51e3-44a7-9272-21b82eaecc41" />
 
 Video and image generation are routed through
 [OpenRouter](https://openrouter.ai/docs/guides/overview/multimodal/video-generation);
