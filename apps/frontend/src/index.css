@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Pixovid — Higgsfield-style theme.
+ * Pure-black canvas, dark neutral surfaces, a signature electric-lime primary
+ * CTA and a hot-pink secondary accent for "trending"/discount badges. No light
+ * theme.
+ */
+:root,
+.dark {
+  --background: oklch(0.04 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.09 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.08 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  /* Electric-lime CTA buttons on black — the Higgsfield signature. */
+  --primary: oklch(0.92 0.21 124);
+  --primary-foreground: oklch(0.18 0.02 124);
+  --secondary: oklch(0.18 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.16 0 0);
+  --muted-foreground: oklch(0.64 0 0);
+  --accent: oklch(0.2 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.62 0.21 18);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.92 0.21 124);
+  --radius: 0.75rem;
+
+  /* Brand accents: electric lime + hot pink. */
+  --brand: oklch(0.92 0.21 124);
+  --brand-2: oklch(0.66 0.24 357);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    color-scheme: dark;
+  }
+  /* Interactive elements should feel clickable (browsers default buttons to the
+   * arrow cursor). Disabled controls fall back to not-allowed. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  label[for],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  body {
+    min-height: 100vh;
+    background-color: var(--color-background);
+    /* Flat black canvas with a single faint lime glow at the top (Higgsfield). */
+    background-image: radial-gradient(
+      ellipse 70rem 30rem at 50% -10rem,
+      oklch(0.92 0.21 124 / 7%),
+      transparent 70%
+    );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    color: var(--color-foreground);
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      Roboto,
+      Helvetica,
+      Arial,
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+  }
+  ::selection {
+    background-color: oklch(0.92 0.21 124 / 35%);
+    color: oklch(0.99 0 0);
+  }
+
+  /* Sleek, unobtrusive dark scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(1 0 0 / 14%) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: oklch(1 0 0 / 12%);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(1 0 0 / 22%);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Subtle white→muted gradient text for hero headlines. */
+  .text-gradient {
+    background: linear-gradient(
+      180deg,
+      oklch(0.99 0 0),
+      oklch(0.72 0.01 286)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}

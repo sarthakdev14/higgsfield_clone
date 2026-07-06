@@ -1,0 +1,66 @@
+name: Build and push images
+
+# Builds the backend and frontend Docker images and pushes them to Docker Hub.
+# The frontend bakes VITE_API_URL at build time, so production must build with the
+# production API origin (https://api.pixovid.com).
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  - Docker Hub user/org with push access to 100xdevs/*
+#   DOCKERHUB_TOKEN     - Docker Hub access token
+#
+# Images produced (tagged with both `latest` and the commit SHA):
+#   100xdevs/video-arena-backend
+#   100xdevs/video-arena-frontend
+#
+# The production-ops manifests reference the `latest` tag, so after a push trigger
+# a rollout with:  kubectl -n 100xdevs rollout restart deploy/video-arena-backend deploy/video-arena-frontend
+# (or update the image tag to ${{ github.sha }} in production-ops to let ArgoCD sync).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY_NAMESPACE: 100xdevs
+  FRONTEND_API_URL: https://api.pixovid.com
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            image: video-arena-backend
+            dockerfile: apps/backend/Dockerfile
+          - name: frontend
+            image: video-arena-frontend
+            dockerfile: apps/frontend/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          # Only the frontend consumes VITE_API_URL; the backend ignores it.
+          build-args: |
+            VITE_API_URL=${{ env.FRONTEND_API_URL }}
+          tags: |
+            ${{ env.REGISTRY_NAMESPACE }}/${{ matrix.image }}:latest
+            ${{ env.REGISTRY_NAMESPACE }}/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

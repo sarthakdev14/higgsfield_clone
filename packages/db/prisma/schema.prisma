@@ -1,0 +1,546 @@
+// Prisma schema for video-arena
+// Docs: https://www.prisma.io/docs
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth models (better-auth)
+// These models match the schema expected by better-auth's Prisma adapter.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String     @id
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  image         String?
+  // "user" (default) or "admin". Admins can create video templates. Seeded from
+  // the ADMIN_EMAILS allowlist on first authenticated request (see middleware/admin).
+  role          String     @default("user")
+  // Spendable credit balance. Topped up via Razorpay; spent on generations.
+  // The CreditTransaction ledger is the audit trail; this is the live balance.
+  credits       Int        @default(0)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  videos        Video[]
+  images        Image[]
+  faceSwaps     FaceSwap[]
+  avatars       Avatar[]
+  templates     Template[]       @relation("TemplateCreator")
+  templateRenders TemplateRender[]
+  creditTransactions CreditTransaction[]
+  payments      Payment[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
+}
+
+// ---------------------------------------------------------------------------
+// Application models
+// ---------------------------------------------------------------------------
+
+// Shared lifecycle status for every kind of generation (video, image, face swap).
+enum GenerationStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+// Per-block phase within a template render, surfaced on the live progress page.
+enum RenderBlockPhase {
+  QUEUED            // waiting for a worker slot
+  FACE_SWAP         // swapping the user's face onto the block's frame(s)
+  VIDEO_GENERATION  // generating the clip via the provider
+  RETRYING          // a generation attempt failed; trying again
+  STITCHING         // generation done; clip is being composited into the timeline
+  COMPLETED         // clip generated successfully
+  REUSED            // no work needed (uploaded source clip or reused baked clip)
+  FELL_BACK         // generation failed; reused the template's baked clip instead
+  FAILED            // generation failed and no fallback was available
+}
+
+model Video {
+  id     String           @id @default(cuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status GenerationStatus @default(PENDING)
+
+  // Generation parameters
+  prompt        String
+  model         String
+  duration      Int?
+  resolution    String?
+  aspectRatio   String?
+  generateAudio Boolean?
+
+  // Object-store keys (MinIO). Inputs uploaded by the user and the final output.
+  startFrameKey      String?
+  endFrameKey        String?
+  referenceFrameKeys String[] @default([])
+  videoKey           String?
+
+  // OpenRouter bookkeeping
+  providerJobId String?
+  cost          Float?
+  error         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("video")
+}
+
+model Image {
+  id     String           @id @default(cuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status GenerationStatus @default(PENDING)
+
+  // Generation parameters
+  prompt      String
+  model       String
+  resolution  String?
+  aspectRatio String?
+
+  // Object-store keys (MinIO). Optional reference inputs and the final output.
+  referenceImageKeys String[] @default([])
+  imageKey           String?
+
+  // OpenRouter bookkeeping
+  providerJobId String?
+  cost          Float?
+  error         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("image")
+}
+
+model FaceSwap {
+  id     String           @id @default(cuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status GenerationStatus @default(PENDING)
+
+  // Object-store keys (MinIO). The base image, the face to apply, and the result.
+  sourceKey String // the face to apply
+  targetKey String // the base image being modified
+  outputKey String?
+
+  error String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("face_swap")
+}
+
+// ---------------------------------------------------------------------------
+// Video templates
+//
+// An Avatar is a user's likeness, built from 1-2 photos. The primary photo is
+// used both as the FaceFusion source (to swap onto block frames) and as an
+// OpenRouter reference image (to keep the person consistent across blocks).
+//
+// A Template is an admin-authored, longer-form video composed of an ordered set
+// of TemplateBlocks (each a short prompt-driven clip) laid out on a Premiere-pro
+// style timeline, plus any number of TemplateAudioClips on audio lanes. The
+// timeline has no fixed length — it grows to fit the furthest clip. Templates
+// declare 1-2 avatar "slots"; each block targets a slot. Rendering a template
+// generates every block (face-swapping the avatar onto start/end frames when
+// enabled), stitches the clips together, mixes the audio clips over them, and
+// produces a final video + thumbnail.
+// ---------------------------------------------------------------------------
+
+model Avatar {
+  id     String           @id @default(cuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status GenerationStatus @default(COMPLETED)
+
+  name String
+
+  // Object-store keys (MinIO). The uploaded source photos (1-2) and the primary
+  // face image used for swaps + references (defaults to the first source photo).
+  sourceImageKeys String[] @default([])
+  faceKey         String?
+
+  error String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  templateRenders TemplateRender[]
+
+  @@index([userId])
+  @@map("avatar")
+}
+
+model Template {
+  id        String @id @default(cuid())
+  creatorId String
+  creator   User   @relation("TemplateCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+
+  // Number of avatar slots (1 or 2) a user must fill when rendering.
+  avatarSlots Int @default(1)
+
+  // The admin's own avatars assigned to the slots (in slot order). These are the
+  // "Avatar 1"/"Avatar 2" referenced by blocks and used for the admin's export.
+  avatarIds String[] @default([])
+
+  // Whether the template is finalised/exported and visible to users.
+  published Boolean @default(false)
+
+  // Admin's description of the cover thumbnail. Used to AI-generate the thumbnail
+  // (with the relevant avatar passed as a reference image so the actor appears) on
+  // both the admin's export and each user's render.
+  thumbnailPrompt String?
+
+  // Export outputs: the admin's reference render + its thumbnail, shown to users.
+  previewVideoKey String?
+  thumbnailKey    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  blocks      TemplateBlock[]
+  audioClips  TemplateAudioClip[]
+  renders     TemplateRender[]
+
+  @@index([creatorId])
+  @@map("template")
+}
+
+model TemplateBlock {
+  id         String   @id @default(cuid())
+  templateId String
+  template   Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  // Position on the timeline (seconds) and rendering order.
+  order    Int
+  startSec Float
+  endSec   Float
+
+  // Which video track (lane) this block sits on. Higher tracks render on top:
+  // where blocks overlap in time, the highest-track block wins.
+  track Int @default(0)
+
+  // Generation parameters for this clip. For an admin-uploaded "raw" video block
+  // (see sourceVideoKey) these are not used and may be empty strings.
+  prompt      String
+  model       String
+  // Length (seconds) the model generates. The block's timeline footprint equals
+  // this duration (endSec = startSec + duration); models only accept specific
+  // durations, so this is constrained per-model in the UI.
+  duration    Int?
+  resolution  String?
+  aspectRatio String?
+
+  // Object-store keys (MinIO) for this block's base start/end frames.
+  startImageKey String?
+  endImageKey   String?
+
+  // Cached "approved" face-swap previews of the start/end frames, produced by the
+  // "Generate face swap" action so the admin can review the swap before baking.
+  // When present (and not a forced user re-render) the bake reuses these instead
+  // of swapping again. Invalidated when the base frame or avatar slot changes.
+  swappedStartKey String?
+  swappedEndKey   String?
+
+  // Object-store key (MinIO) for this block's individually "baked" preview clip,
+  // generated on demand so the admin can preview a single block on the timeline.
+  videoKey String?
+
+  // Object-store key (MinIO) for an admin-uploaded "raw" video. When set, the
+  // block is NOT AI-generated: this exact clip is used directly on the timeline
+  // and in every render (admin export *and* user renders) — no prompt/model,
+  // avatar reference or face-swap is applied. `duration` is the uploaded clip's
+  // real length, so it can still be cropped/trimmed like a generated clip.
+  sourceVideoKey String?
+
+  // Crop window (Premiere-style) into the generated clip. The full clip is still
+  // `duration` seconds long; only [cropStart, cropEnd) is used on the timeline +
+  // in the render. cropEnd null means "to the end" (= duration). The block's
+  // footprint is endSec - startSec = (cropEnd ?? duration) - cropStart.
+  cropStart Float  @default(0)
+  cropEnd   Float?
+
+  // Copy/paste link: blocks sharing a linkGroupId share generation content
+  // (prompt, model, frames, baked clip, …) so editing/re-baking one updates all.
+  linkGroupId String?
+
+  // Which template avatar slot (0-based) this block uses. The avatar is always
+  // passed as the OpenRouter reference image, and is the face-swap source when
+  // faceSwapStart/faceSwapEnd are enabled (no per-block image re-uploads).
+  faceSwapStart Boolean @default(false)
+  faceSwapEnd   Boolean @default(false)
+  avatarSlot    Int     @default(0)
+
+  // Optional natural-language guidance used when the active swap provider is a
+  // diffusion model (SWAP_PROVIDER=flux), e.g. "keep the soft window lighting".
+  // Ignored by the classic FaceFusion swapper. Shared across a link group.
+  swapContext String?
+
+  // When true, the audio under this block on the timeline is sent to the video
+  // model as an audio reference so the subject lip-syncs to it. Only honored by
+  // models that support audio input (e.g. Seedance 2.0); see supportsAudioLipsync.
+  lipsync Boolean @default(false)
+
+  // Which model performs this block's face swap: "facefusion" (local service) or
+  // an OpenRouter image model id (e.g. "google/gemini-3-pro-image"). Null falls
+  // back to the server default (SWAP_PROVIDER / OPENROUTER_SWAP_MODEL). Shared
+  // across a link group.
+  swapModel String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([templateId])
+  @@index([linkGroupId])
+  @@map("template_block")
+}
+
+// An audio clip placed on the template timeline. Like a video block it has a
+// position (startSec/endSec), an audio "lane" (track) and a Premiere-style crop
+// window into its full `duration`. Multiple clips (across lanes, possibly
+// overlapping) are mixed together over the stitched video on render.
+model TemplateAudioClip {
+  id         String   @id @default(cuid())
+  templateId String
+  template   Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  order Int @default(0)
+
+  // Position on the timeline (seconds) and which audio lane it sits on.
+  startSec Float
+  endSec   Float
+  track    Int @default(0)
+
+  // Object-store key (MinIO) for the uploaded audio file + a display label.
+  audioKey String
+  name     String?
+
+  // Full uploaded length (seconds) and the crop window [cropStart, cropEnd) used
+  // on the timeline. Footprint = endSec - startSec = (cropEnd ?? duration) - cropStart.
+  duration  Float
+  cropStart Float  @default(0)
+  cropEnd   Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([templateId])
+  @@map("template_audio_clip")
+}
+
+model TemplateRender {
+  id         String           @id @default(cuid())
+  templateId String
+  template   Template         @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     GenerationStatus @default(PENDING)
+
+  // The avatars filling the template's slots, in slot order.
+  avatarIds String[] @default([])
+
+  // Object-store keys (MinIO) for the stitched video + its thumbnail.
+  videoKey     String?
+  thumbnailKey String?
+
+  cost  Float?
+  error String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Avatars referenced by this render (so they can't be deleted out from under it).
+  avatars Avatar[]
+
+  // Per-block progress, shown on the live /generation/:id page.
+  blocks TemplateRenderBlock[]
+
+  @@index([templateId])
+  @@index([userId])
+  @@map("template_render")
+}
+
+// Tracks one template block's progress within a render. Display fields are
+// denormalised (copied from the TemplateBlock at render time) so the progress
+// page is stable even if the admin later edits/deletes the underlying block.
+model TemplateRenderBlock {
+  id       String         @id @default(cuid())
+  renderId String
+  render   TemplateRender @relation(fields: [renderId], references: [id], onDelete: Cascade)
+
+  // The source TemplateBlock id (not a FK; the block may be edited/removed later).
+  blockId String
+
+  // Timeline placement + a short human label, for laying blocks out in order.
+  order    Int
+  startSec Float
+  endSec   Float
+  label    String?
+
+  phase   RenderBlockPhase @default(QUEUED)
+  attempt Int              @default(0)
+  error   String?
+
+  // Persisted per-render artifacts so a retry can resume instead of redoing work:
+  //  - videoKey: this block's generated clip (set once it COMPLETES).
+  //  - swappedStartKey/swappedEndKey: the user's face swapped onto the block's
+  //    start/end frame (persisted right after the swap, before video generation).
+  videoKey        String?
+  swappedStartKey String?
+  swappedEndKey   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([renderId])
+  @@map("template_render_block")
+}
+
+// ---------------------------------------------------------------------------
+// Credits & billing
+//
+// Users buy credits with money (via Razorpay) and spend them on generations
+// (videos, images, template renders). Each action has a fixed credit price
+// (see CREDITS_PER_* env vars) chosen to keep a healthy margin over the
+// underlying OpenRouter provider cost. The User.credits field holds the live
+// balance; CreditTransaction is the append-only ledger that explains it.
+// ---------------------------------------------------------------------------
+
+// Why a credit balance changed.
+enum CreditTxnType {
+  PURCHASE      // bought via a successful Razorpay payment
+  SPEND         // consumed by a generation
+  REFUND        // returned to the user after a failed generation
+  BONUS         // promotional / pack bonus credits
+  ADJUSTMENT    // manual admin correction
+}
+
+// A single change to a user's credit balance. Sum of `amount` == User.credits.
+model CreditTransaction {
+  id     String        @id @default(cuid())
+  userId String
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   CreditTxnType
+
+  // Signed delta applied to the balance (positive = added, negative = spent).
+  amount Int
+  // The user's balance immediately after this transaction (audit convenience).
+  balanceAfter Int
+
+  // Human-readable note, e.g. "Video generation" or "Starter pack".
+  description String?
+
+  // What this transaction relates to, for traceability + idempotent refunds:
+  // referenceType in {"video","image","template_render","payment"} and the row id.
+  referenceType String?
+  referenceId   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([referenceType, referenceId])
+  @@map("credit_transaction")
+}
+
+// Lifecycle of a Razorpay credit purchase.
+enum PaymentStatus {
+  CREATED // order created, awaiting payment
+  PAID    // payment verified, credits granted
+  FAILED  // payment failed / abandoned
+}
+
+// A Razorpay order to buy a credit pack. Credits are granted exactly once when
+// the payment is verified (the unique razorpayOrderId guards against double-grant).
+model Payment {
+  id     String        @id @default(cuid())
+  userId String
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status PaymentStatus @default(CREATED)
+
+  // The pack the user is buying (see CREDIT_PACKS in the backend).
+  packId String
+
+  // Amount in the smallest currency unit (paise for INR) and the ISO currency.
+  amount   Int
+  currency String @default("INR")
+
+  // Credits to grant on success (base pack credits + any bonus).
+  credits Int
+
+  // Razorpay identifiers. orderId is created up front; paymentId/signature are
+  // filled in on verification.
+  razorpayOrderId   String  @unique
+  razorpayPaymentId String?
+  razorpaySignature String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("payment")
+}

@@ -1,0 +1,133 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-video_arena}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:4000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-video_arena}?schema=public
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-change-me-in-production-please-32chars}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_THUMBNAIL_MODEL: ${OPENROUTER_THUMBNAIL_MODEL:-google/gemini-3.1-flash-image}
+      OPENROUTER_THUMBNAIL_FALLBACK_MODELS: ${OPENROUTER_THUMBNAIL_FALLBACK_MODELS:-bytedance-seed/seedream-4.5,black-forest-labs/flux.2-klein-4b}
+      SWAP_PROVIDER: ${SWAP_PROVIDER:-facefusion}
+      OPENROUTER_SWAP_MODEL: ${OPENROUTER_SWAP_MODEL:-black-forest-labs/flux.2-klein-4b}
+      FACEFUSION_URL: ${FACEFUSION_URL:-http://facefusion:7865}
+      RENDER_BLOCK_CONCURRENCY: ${RENDER_BLOCK_CONCURRENCY:-3}
+      RENDER_VIDEO_MAX_ATTEMPTS: ${RENDER_VIDEO_MAX_ATTEMPTS:-3}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      CREDITS_PER_IMAGE: ${CREDITS_PER_IMAGE:-6}
+      CREDITS_PER_VIDEO: ${CREDITS_PER_VIDEO:-60}
+      CREDITS_PER_TEMPLATE_RENDER: ${CREDITS_PER_TEMPLATE_RENDER:-1000}
+      USD_INR_RATE: ${USD_INR_RATE:-86}
+      MINIO_ENDPOINT: minio
+      MINIO_FRONTEND_ENDPOINT: ${MINIO_FRONTEND_ENDPOINT:-localhost}
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-arena}
+    ports:
+      - "4000:4000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+      args:
+        VITE_API_URL: ${BACKEND_URL:-http://localhost:4000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+  # Self-hosted FaceFusion face-swap service (HTTP wrapper around FaceFusion's
+  # `headless-run` CLI — see infra/facefusion). Started only with the
+  # "facefusion" profile because the image is large (~5GB) and pulls models on
+  # first use:
+  #   docker compose --profile facefusion up -d facefusion
+  # Swap API: http://localhost:7865/swap
+  facefusion:
+    build:
+      context: .
+      dockerfile: infra/facefusion/Dockerfile
+    restart: unless-stopped
+    profiles: ["facefusion"]
+    environment:
+      # Swap tuning — defaults favour likeness (see infra/facefusion/server.py).
+      # Lower FACE_ENHANCER_BLEND (or set FACE_ENHANCER_ENABLED=false) for an even
+      # stronger resemblance at the cost of a rougher finish.
+      FACE_SWAPPER_MODEL: ${FACE_SWAPPER_MODEL:-hyperswap_1a_256}
+      FACE_SWAPPER_PIXEL_BOOST: ${FACE_SWAPPER_PIXEL_BOOST:-1024x1024}
+      FACE_ENHANCER_ENABLED: ${FACE_ENHANCER_ENABLED:-true}
+      FACE_ENHANCER_MODEL: ${FACE_ENHANCER_MODEL:-gfpgan_1.4}
+      FACE_ENHANCER_BLEND: ${FACE_ENHANCER_BLEND:-30}
+      FACE_MASK_BLUR: ${FACE_MASK_BLUR:-0.2}
+    ports:
+      - "7865:7865"
+    volumes:
+      # Persists downloaded models across restarts; pre-pulled on first boot.
+      - facefusion_data:/facefusion/.assets
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7865/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # The first boot pre-downloads models before the API starts; give it room.
+      start_period: 600s
+
+volumes:
+  postgres_data:
+  minio_data:
+  facefusion_data:
