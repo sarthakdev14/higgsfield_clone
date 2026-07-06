@@ -9,7 +9,10 @@
     "start": "bun src/index.ts",
     "build": "tsc --noEmit",
     "lint": "eslint src",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@repo/db": "*",
@@ -29,6 +32,10 @@
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.5",
-    "typescript": "5.9.2"
+    "@types/supertest": "^6.0.2",
+    "@vitest/coverage-v8": "^3.2.4",
+    "supertest": "^7.1.0",
+    "typescript": "5.9.2",
+    "vitest": "^3.2.4"
   }
 }
