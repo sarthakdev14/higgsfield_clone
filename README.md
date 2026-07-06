@@ -1,4 +1,4 @@
-# Pixovid
+# Higgsfield clone
 
 A generative-media SaaS. Users sign in and can:
 
@@ -18,13 +18,13 @@ store (MinIO).
 
 This is a [Turborepo](https://turborepo.dev) monorepo managed with **bun**.
 
-| Path                      | Description                                                                 |
-| ------------------------- | --------------------------------------------------------------------------- |
-| `apps/frontend`           | React + Vite + TypeScript SPA (Tailwind v4 + shadcn-style UI).              |
-| `apps/backend`            | TypeScript + Express API. Auth (better-auth), OpenRouter + MinIO services.  |
-| `packages/db`             | Prisma schema + client. Shared Postgres data layer reused by the backend.   |
-| `packages/typescript-config` | Shared `tsconfig` presets.                                               |
-| `packages/eslint-config`  | Shared ESLint config.                                                       |
+| Path                         | Description                                                                |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `apps/frontend`              | React + Vite + TypeScript SPA (Tailwind v4 + shadcn-style UI).             |
+| `apps/backend`               | TypeScript + Express API. Auth (better-auth), OpenRouter + MinIO services. |
+| `packages/db`                | Prisma schema + client. Shared Postgres data layer reused by the backend.  |
+| `packages/typescript-config` | Shared `tsconfig` presets.                                                 |
+| `packages/eslint-config`     | Shared ESLint config.                                                      |
 
 Services (via `docker-compose.yml`):
 
@@ -135,15 +135,15 @@ http://localhost:4000/api/auth/callback/google
 
 ## Useful scripts
 
-| Command                 | Description                                  |
-| ----------------------- | -------------------------------------------- |
-| `bun run docker:up`     | Build & start the full stack in Docker.      |
-| `bun run docker:down`   | Stop the stack.                              |
-| `bun run docker:reset`  | Stop the stack and delete volumes.           |
+| Command                     | Description                                     |
+| --------------------------- | ----------------------------------------------- |
+| `bun run docker:up`         | Build & start the full stack in Docker.         |
+| `bun run docker:down`       | Stop the stack.                                 |
+| `bun run docker:reset`      | Stop the stack and delete volumes.              |
 | `bun run docker:facefusion` | Build & start the FaceFusion face-swap service. |
-| `bun run infra:up`      | Start only Postgres + MinIO.                 |
-| `bun run dev`           | Run all apps locally with hot reload.        |
-| `bun run build`         | Build all apps & packages.                   |
-| `bun run check-types`   | Type-check the whole monorepo.               |
-| `bun run db:migrate`    | Run Prisma migrations.                       |
-| `bun run db:studio`     | Open Prisma Studio.                          |
+| `bun run infra:up`          | Start only Postgres + MinIO.                    |
+| `bun run dev`               | Run all apps locally with hot reload.           |
+| `bun run build`             | Build all apps & packages.                      |
+| `bun run check-types`       | Type-check the whole monorepo.                  |
+| `bun run db:migrate`        | Run Prisma migrations.                          |
+| `bun run db:studio`         | Open Prisma Studio.                             |
